@@ -1,0 +1,116 @@
+pml_training<-read.csv('C:\\Users\\anc1\\Downloads\\pml-training.csv')
+pml_training$X=NULL
+pml_testing$X=NULL
+pml_testing<-read.csv('C:\\Users\\anc1\\Downloads\\pml-testing.csv')
+library(knitr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+library(corrplot)
+set.seed(12345)
+#clean the data with 95% NA values and totally NA values
+inTrain<-createDataPartition(pml_training$classe,p=0.7,list=FALSE)
+pml_internal_train<-pml_training[inTrain,]
+pml_internal_test<-pml_training[-inTrain,]
+NZV<-nearZeroVar(pml_internal_train)
+pml_internal_train<-pml_internal_train[,-NZV]
+pml_internal_test<-pml_internal_test[,-NZV]
+pml_testing<-pml_testing[,-NZV]
+AllNA<-sapply(pml_internal_train,function(x)mean(is.na(x)))>0.95
+pml_internal_train<-pml_internal_train[,AllNA==FALSE]
+pml_internal_test<-pml_internal_test[,AllNA==FALSE]
+pml_testing<-pml_testing[,AllNA==FALSE]
+pml_internal_train<-pml_internal_train[,-c(1:4)]
+pml_internal_test<-pml_internal_test[,-c(1:4)]
+pml_testing<-pml_testing[,-c(1:4)]
+dim(pml_internal_train)
+#find the corrlated varaibles
+corMatrix_data<-cor(pml_internal_train[,-54])
+corrplot(corMatrix,order="FPC",method="color",type = "lower",tl.cex = 0.8,tl.col=rgb(0,0,0))
+#The highly correlated variables are shown in dark colors in the graph above. To make an evem more compact analysis, I did a PCA analysis on the internal training dataset.
+
+
+#perform PCA before modeling
+pcaObj<-preProcess(pml_internal_train,method = c("center","scale","pca"),thresh = 0.9)
+
+#perform random forest modeling
+set.seed(12345)
+pml_train_pca<-predict(pcaObj,pml_internal_train)
+controlRF<-trainControl(method = "cv",number=3,verboseIter = FALSE)
+mod_rf<-train(classe~.,data = pml_train_pca,method="rf",trControl=controlRF)
+mod_rf$finalModel
+pml_test_pca<-predict(pcaObj,pml_internal_test)
+pred_rf<-predict(mod_rf,pml_test_pca)
+confu_pred_rf<-confusionMatrix(pred_rf,pml_test_pca$classe)
+plot(confu_pred_rf$table,col=confu_pred_rf$byClass,main=paste("Random Forest - Accuracy =",round(confu_pred_rf$overall['Accuracy'],4)))
+#my random forest modeling can correctly predict 98% of the internal testing data
+#Accuracy : 0.9791          
+#                 95% CI : (0.9751, 0.9826)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+#                  Kappa : 0.9736          
+# Mcnemar's Test P-Value : NA 
+
+
+
+#perform decision tree modeling
+set.seed(12345)
+mod_rpart<-rpart(classe~.,data=pml_train_pca,method="class")
+fancyRpartPlot(mod_rpart)
+pred_rpart<-predict(mod_rpart,pml_test_pca,type = "class")
+confu_pred_rpart<-confusionMatrix(pred_rpart,pml_test_pca$classe)
+confu_pred_rpart
+#my decision tree model can correctly predict 52% of the internal testing data
+#Accuracy : 0.5174          
+#                 95% CI : (0.5046, 0.5303)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+#                  Kappa : 0.3887          
+# Mcnemar's Test P-Value : < 2.2e-16  
+
+#gbm model
+set.seed(12345)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+mod_gbm<-train(classe~., data=pml_train_pca,method='gbm',trControl=controlGBM,verbose=FALSE)
+pred_gbm<-predict(mod_gbm,pml_test_pca)
+confu_pred_gbm<-confusionMatrix(pred_gbm,pml_test_pca$classe)
+confu_pred_gbm
+#my gbm model can correctly predict 80% of the internal testing data
+# Accuracy : 0.8007          
+#                 95% CI : (0.7902, 0.8108)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+#                  Kappa : 0.748           
+# Mcnemar's Test P-Value : < 2.2e-16    
+
+
+#combination of all models prediction
+all_model<-data.frame(pred_rf,pred_rpart,pred_gbm,classe=pml_test_pca$classe)
+comFit<-train(classe~.,method="rf",data=all_model)
+pred_com<-predict(comFit,pml_test_pca)
+con_pred_com<-confusionMatrix(pred_com,pml_test_pca$classe)
+con_pred_com
+#my combined model can predict 98% of the data in the internal testing data
+#Accuracy : 0.9791          
+#                 95% CI : (0.9751, 0.9826)
+#    No Information Rate : 0.2845          
+#    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+#                  Kappa : 0.9736          
+# Mcnemar's Test P-Value : NA   
+
+
+
+#Finally, I chose to apply the random forest results to external testing data, becuase the combined model it too complex to interpret and it has the same accuracy as random forest
+pml_external_testing_pca<-predict(pcaObj,pml_testing)
+pml_external_testing_pca$problem_id=NULL
+predictTest<-predict(mod_rf,pml_external_testing_pca)
+predictTest
+#my final result for prediction of the 20 classes as:
+#[1] B A A A A E D B A A B C B A E E A B B B
+Levels: A B C D E
